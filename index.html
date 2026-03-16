@@ -65,7 +65,7 @@
             animation: fadeIn 0.5s ease-out;
         }
         .photo-card:hover { transform: translateY(-8px) rotate(-1deg); }
-        .photo-card img { width: 100%; height: 260px; object-fit: cover; border-radius: 4px; background-color: #f0f0f0; }
+        .photo-card img { width: 100%; height: 260px; border-radius: 4px; background-color: #f0f0f0; object-fit: cover; display: block; }
         .photo-date { margin-top: 12px; font-size: 0.85rem; color: var(--text-muted); text-align: center; }
 
         .delete-btn {
@@ -92,6 +92,8 @@
         .nav-btn:hover { color: var(--accent-color); }
         .prev-btn { left: 10px; } .next-btn { right: 10px; }
 
+        #error-msg { color: #ff6b6b; text-align: center; margin-bottom: 20px; display: none; padding: 10px; border: 1px solid #ff6b6b; border-radius: 8px; }
+
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
@@ -102,6 +104,8 @@
         <h1>我的雲端溫馨相簿</h1>
         <p class="subtitle">珍藏每一個美好瞬間 · 跨裝置同步中</p>
     </header>
+
+    <div id="error-msg"></div>
 
     <div class="upload-section" id="drop-zone">
         <input type="file" id="file-input" accept="image/*" multiple>
@@ -127,7 +131,7 @@
     import { getFirestore, collection, addDoc, query, orderBy, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
     import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
-    // 這裡就是你要貼上代碼的地方，我已經根據你的截圖幫你填好了
+    // Firebase 配置
     const firebaseConfig = {
       apiKey: "AIzaSyCQ2DyzBODSmf4jGfl5GfXW3FnPZ5MLN1A",
       authDomain: "family-album-4fd36.firebaseapp.com",
@@ -147,6 +151,7 @@
     const fileInput = document.getElementById('file-input');
     const statusText = document.getElementById('status-text');
     const dropZone = document.getElementById('drop-zone');
+    const errorMsgEl = document.getElementById('error-msg');
 
     let allPhotos = [];
     let currentIdx = 0;
@@ -156,17 +161,27 @@
         return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
     };
 
+    function showError(msg) {
+        errorMsgEl.innerText = msg;
+        errorMsgEl.style.display = 'block';
+    }
+
     // 1. 實時同步雲端資料庫
     const q = query(photosCol, orderBy("timestamp", "desc"));
     onSnapshot(q, (snapshot) => {
         allPhotos = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        errorMsgEl.style.display = 'none';
         renderGallery();
     }, (error) => {
-        console.error("同步失敗:", error);
-        statusText.innerHTML = '<p style="color:red;">連線失敗，請檢查 Firebase Database 的規則設定是否已改為測試模式。</p>';
+        console.error("Firestore 連線失敗:", error);
+        if (error.code === 'permission-denied') {
+            showError("權限不足：請至 Firebase 控制台確認 Firestore 是否已啟用並設定為「測試模式」。");
+        } else {
+            showError("無法連線至雲端服務，請檢查網路連線。");
+        }
     });
 
-    // 2. 處理檔案上傳至雲端
+    // 2. 處理檔案上傳
     fileInput.addEventListener('change', async (e) => {
         const files = e.target.files;
         if (!files.length) return;
@@ -189,7 +204,7 @@
                 });
             } catch (err) {
                 console.error("上傳失敗:", err);
-                alert("上傳失敗！請確認 Firebase Storage 的規則是否已開啟（測試模式）。");
+                alert("上傳失敗！請確認 Firebase 控制台中的 Storage 服務已啟用。");
             }
         }
 
@@ -205,7 +220,7 @@
             const card = document.createElement('div');
             card.className = 'photo-card';
             card.innerHTML = `
-                <img src="${p.url}" loading="lazy">
+                <img src="${p.url}" loading="lazy" alt="相片">
                 <div class="photo-date">${formatDate(p.timestamp)}</div>
                 <button class="delete-btn" title="從雲端刪除">&times;</button>
             `;
@@ -223,7 +238,9 @@
         if (!confirm("確定要從雲端刪除嗎？所有人的裝置都將無法看到此照片。")) return;
         try {
             await deleteDoc(doc(db, "photos", photo.id));
-            await deleteObject(ref(storage, photo.storagePath));
+            if (photo.storagePath) {
+                await deleteObject(ref(storage, photo.storagePath));
+            }
         } catch (err) {
             console.error("刪除失敗:", err);
         }
@@ -241,8 +258,10 @@
     }
 
     function updateLightbox() {
-        lbImg.src = allPhotos[currentIdx].url;
-        lbInfo.innerText = formatDate(allPhotos[currentIdx].timestamp);
+        if (allPhotos[currentIdx]) {
+            lbImg.src = allPhotos[currentIdx].url;
+            lbInfo.innerText = formatDate(allPhotos[currentIdx].timestamp);
+        }
     }
 
     document.getElementById('close-lb').onclick = () => {
